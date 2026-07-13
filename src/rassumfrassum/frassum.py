@@ -3,6 +3,7 @@ LSP-specific message routing and merging logic.
 """
 
 import asyncio
+import re
 from dataclasses import dataclass, field
 from functools import reduce
 from pathlib import PurePosixPath
@@ -295,7 +296,20 @@ class LspLogic:
         """
         Handle client responses to server requests.
         """
-        pass
+        if method == 'workspace/configuration' and not is_error:
+            items = cast(list, response_payload)
+            for i, item in enumerate(items):
+                if not isinstance(item, dict) or 'rass' not in item:
+                    continue
+                rass = item['rass']
+                generic = {k: v for k, v in item.items() if k != 'rass'}
+                new_item = generic
+                if isinstance(rass, dict):
+                    for pattern, overlay in rass.items():
+                        if re.search(pattern, server.name) and isinstance(overlay, dict):
+                            new_item = dmerge(overlay, generic)
+                            break
+                items[i] = new_item
 
     async def on_server_request(
         self, method: str, params: JSON, source: Server
@@ -580,8 +594,10 @@ class LspLogic:
 
     def process_request(
         self, method: str, params: JSON, server: Server
-    ) -> None:
-        """Called just before request is forwarded to a specific server"""
+    ) -> JSON | None:
+        """Called just before request is forwarded to a specific server.
+
+        Return the params to send to this server, or None for no params."""
         if (
             method == 'textDocument/codeAction'
             and (context := params.get('context'))
@@ -598,6 +614,23 @@ class LspLogic:
                 ):
                     _, orig_data, _ = stashed
                     d['data'] = orig_data
+
+        if (
+            method == 'initialize'
+            and (init_opts := params.get('initializationOptions'))
+            and 'rass' in init_opts
+        ):
+            rass = init_opts['rass']
+            generic_opts = {k: v for k, v in init_opts.items() if k != 'rass'}
+            new_init_opts = generic_opts
+            if isinstance(rass, dict):
+                for pattern, overlay in rass.items():
+                    if re.search(pattern, server.name) and isinstance(overlay, dict):
+                        new_init_opts = dmerge(overlay, generic_opts)
+                        break
+            params = {**params, 'initializationOptions': new_init_opts}
+
+        return params
 
     def _merge_initialize_payloads(
         self, aggregate: JSON, payload: JSON, source: Server

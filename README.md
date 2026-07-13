@@ -136,6 +136,71 @@ def servers():
     ]
 ```
 
+### Configuring individual servers
+
+The `initializationOptions` field of the LSP `initialize` request can
+carry a special `rass` sub-object that lets you target configuration
+at individual multiplexed servers without the server seeing it.
+
+```json
+"initializationOptions": {
+  "settings": {
+    "someCommonOption": true
+  },
+  "rass": {
+    "ruff": {
+      "settings": {
+        "fixAll": true,
+        "organizeImports": true
+      }
+    }
+  }
+}
+```
+
+Rass strips the `rass` key before forwarding.  The remaining keys in
+`rass` are Python regexes matched against each server's executable
+name; a match merges that value on top of the generic options.  So
+above, `ty` gets `{"settings": {"someCommonOption": true}}` and
+`ruff` gets `{"settings": {"someCommonOption": true, "fixAll": true,
+"organizeImports": true}}`.
+
+The same mechanism applies to client responses to `workspace/configuration`
+server requests: each item in the response array is inspected for a `rass`
+key and filtered the same way before being forwarded to the requesting server.
+To achieve the same per-server split as above via `workspace/configuration`,
+a client would respond with:
+
+```json
+[
+  {
+    "settings": {
+      "someCommonOption": true
+    },
+    "rass": {
+      "ruff": {
+        "settings": {
+          "fixAll": true,
+          "organizeImports": true
+        }
+      }
+    }
+  }
+]
+```
+
+`ty` receives `{"settings": {"someCommonOption": true}}` and `ruff`
+receives `{"settings": {"someCommonOption": true, "fixAll": true,
+"organizeImports": true}}`.
+
+In both cases the regex is matched against the server's name.  For
+`initializationOptions` this is necessarily the executable name, since
+the server hasn't had a chance to report its own name yet.  For
+`workspace/configuration` it is the name the server reported in its
+`initialize` response.  For well-behaved servers like `ty` and `ruff`
+these are the same, so a regex like `ruff` works identically in both
+contexts.
+
 ## Performance
 
 Performance is always a question, and it's early days.  But some of
