@@ -75,6 +75,7 @@ def _vue_server_info() -> tuple[int, str | None]:
         return (0, None)
 
 
+@cache
 def _find_tsdk() -> str | None:
     """Find a usable TypeScript lib directory for vue-language-server.
 
@@ -85,8 +86,19 @@ def _find_tsdk() -> str | None:
     TypeScript ('typescript.js' present distinguishes a real one).
     """
     cwd = Path.cwd()
-    for dir in [cwd, *cwd.parents]:
-        cand = dir / 'node_modules' / 'typescript' / 'lib'
+    # At cwd or above it, but also shallowly below it: LSP clients
+    # commonly launch servers at the repository root with the JS app
+    # in a subdirectory.
+    candidates = [
+        dir / 'node_modules' / 'typescript' / 'lib'
+        for dir in [cwd, *cwd.parents]
+    ]
+    for pattern in (
+        '*/node_modules/typescript/lib',
+        '*/*/node_modules/typescript/lib',
+    ):
+        candidates.extend(sorted(cwd.glob(pattern)))
+    for cand in candidates:
         if (cand / 'typescript.js').exists():
             return str(cand)
     try:
@@ -157,21 +169,28 @@ class Vue3Logic(LspLogic):
     ):
         if method == 'initialize':
             _, location = _vue_server_info()
+            options = {
+                # Tells typescript-language-server to load the
+                # plugin that makes tsserver understand .vue files.
+                # The other servers ignore this key.
+                'plugins': [
+                    {
+                        'name': '@vue/typescript-plugin',
+                        'location': location,
+                        'languages': ['vue'],
+                        'configNamespace': 'typescript',
+                    }
+                ],
+            }
+            # Give typescript-language-server the same real tsserver
+            # found for --tsdk (see _find_tsdk): its own lookup has
+            # the same TypeScript 7 stub pitfalls.
+            if tsdk := _find_tsdk():
+                tsserver_js = Path(tsdk) / 'tsserver.js'
+                if tsserver_js.exists():
+                    options['tsserver'] = {'path': str(tsserver_js)}
             params['initializationOptions'] = dmerge(
-                params.get('initializationOptions') or {},
-                {
-                    # Tells typescript-language-server to load the
-                    # plugin that makes tsserver understand .vue files.
-                    # The other servers ignore this key.
-                    'plugins': [
-                        {
-                            'name': '@vue/typescript-plugin',
-                            'location': location,
-                            'languages': ['vue'],
-                            'configNamespace': 'typescript',
-                        }
-                    ],
-                },
+                params.get('initializationOptions') or {}, options
             )
         # In the v3 architecture the TypeScript server, not
         # vue-language-server, answers for the <script> parts of .vue
