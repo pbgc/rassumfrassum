@@ -75,6 +75,33 @@ def _vue_server_info() -> tuple[int, str | None]:
         return (0, None)
 
 
+def _find_tsdk() -> str | None:
+    """Find a usable TypeScript lib directory for vue-language-server.
+
+    vue-language-server v3 does require('typescript') from its own
+    installation unless told otherwise with --tsdk, and npm may have
+    satisfied that peer dependency with something unusable, e.g. the
+    API-less TypeScript 7 native preview.  Prefer the project's own
+    TypeScript ('typescript.js' present distinguishes a real one).
+    """
+    cwd = Path.cwd()
+    for dir in [cwd, *cwd.parents]:
+        cand = dir / 'node_modules' / 'typescript' / 'lib'
+        if (cand / 'typescript.js').exists():
+            return str(cand)
+    try:
+        proc = subprocess.run(
+            ['npm', 'root', '--global'],
+            capture_output=True, text=True, timeout=10,
+        )
+        cand = Path(proc.stdout.strip()) / 'typescript' / 'lib'
+        if (cand / 'typescript.js').exists():
+            return str(cand)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
 class Vue2Logic(LspLogic):
     """Custom logic for vue-language-server v2 + friends."""
 
@@ -195,6 +222,14 @@ def servers():
     vue = ['vue-language-server', '--stdio']
     tailwind = ['tailwindcss-language-server', '--stdio']
     if major >= 3:
+        if tsdk := _find_tsdk():
+            vue.append(f'--tsdk={tsdk}')
+        else:
+            warn(
+                "Can't find a usable TypeScript for vue-language-server."
+                "  Install one in the project or with"
+                " 'npm install -g typescript@5'."
+            )
         if shutil.which('typescript-language-server') is None:
             warn(
                 "vue-language-server v3 needs typescript-language-server"
